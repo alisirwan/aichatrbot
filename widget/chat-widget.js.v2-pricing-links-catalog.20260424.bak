@@ -1,0 +1,319 @@
+/* GORE Engineering — chat widget
+ * Vanilla JS IIFE, no dependencies.
+ * Mount: include chat-widget.css + this file on the page. A <div id="gore-chat-root"></div> is optional; the widget creates it if absent.
+ */
+(function () {
+  'use strict';
+
+  if (window.__goreChatLoaded) return;
+  window.__goreChatLoaded = true;
+
+  var CONFIG = {
+    endpoint: (window.GORE_CHAT_ENDPOINT || '/api/chat'),
+    phone: '+46 10 520 04 69',
+    phoneHref: 'tel:+46105200469',
+    refusalLine: 'Jag kan bara svara på frågor om GORE-produkter. För andra frågor, prata med en av våra experter på +46 10 520 04 69.',
+    greeting: 'Hej! Hur kan jag hjälpa dig med GORE-produkter idag?',
+    storageKey: 'gore_chat_history',
+    maxHistory: 20,
+  };
+
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    if (attrs) {
+      for (var k in attrs) {
+        if (k === 'class') node.className = attrs[k];
+        else if (k === 'text') node.textContent = attrs[k];
+        else if (k === 'html') node.innerHTML = attrs[k];
+        else if (k.indexOf('on') === 0 && typeof attrs[k] === 'function') {
+          node.addEventListener(k.slice(2).toLowerCase(), attrs[k]);
+        } else if (attrs[k] !== null && attrs[k] !== undefined) {
+          node.setAttribute(k, attrs[k]);
+        }
+      }
+    }
+    if (children) {
+      (Array.isArray(children) ? children : [children]).forEach(function (c) {
+        if (c == null) return;
+        node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+      });
+    }
+    return node;
+  }
+
+  function loadHistory() {
+    try {
+      var raw = sessionStorage.getItem(CONFIG.storageKey);
+      if (!raw) return [];
+      var arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveHistory(history) {
+    try {
+      var trimmed = history.slice(-CONFIG.maxHistory);
+      sessionStorage.setItem(CONFIG.storageKey, JSON.stringify(trimmed));
+    } catch (e) {
+      // Ignore quota errors
+    }
+  }
+
+  function scrollToBottom(container) {
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function formatText(text) {
+    var safe = String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    return safe.replace(/\n/g, '<br>');
+  }
+
+  function buildUI(root) {
+    var bubble = el('button', {
+      class: 'gore-chat-bubble',
+      type: 'button',
+      'aria-label': 'Öppna chatt',
+      'aria-expanded': 'false',
+    });
+    bubble.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8l-4 4V6a2 2 0 0 1 2-2Zm3 6v2h10v-2H7Zm0 4v2h7v-2H7Z"/></svg>';
+
+    var panel = el('div', { class: 'gore-chat-panel', role: 'dialog', 'aria-label': 'GORE kundservice', 'aria-hidden': 'true' });
+
+    var header = el('div', { class: 'gore-chat-header' }, [
+      el('div', { class: 'gore-chat-title' }, [
+        el('span', { class: 'gore-chat-dot', 'aria-hidden': 'true' }),
+        el('span', { text: 'GORE kundservice' }),
+      ]),
+      el('button', {
+        class: 'gore-chat-close',
+        type: 'button',
+        'aria-label': 'Stäng chatt',
+      }, '×'),
+    ]);
+
+    var messages = el('div', { class: 'gore-chat-messages', role: 'log', 'aria-live': 'polite' });
+
+    var form = el('form', { class: 'gore-chat-form', autocomplete: 'off' });
+    var input = el('input', {
+      class: 'gore-chat-input',
+      type: 'text',
+      placeholder: 'Skriv ett meddelande…',
+      'aria-label': 'Ditt meddelande',
+      maxlength: '2000',
+    });
+    var send = el('button', { class: 'gore-chat-send', type: 'submit', 'aria-label': 'Skicka' });
+    send.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 20v-6l13-2L3 10V4l19 8-19 8Z"/></svg>';
+    form.appendChild(input);
+    form.appendChild(send);
+
+    panel.appendChild(header);
+    panel.appendChild(messages);
+    panel.appendChild(form);
+
+    root.appendChild(bubble);
+    root.appendChild(panel);
+
+    return {
+      bubble: bubble,
+      panel: panel,
+      messages: messages,
+      form: form,
+      input: input,
+      send: send,
+      close: header.querySelector('.gore-chat-close'),
+    };
+  }
+
+  function renderMessage(container, role, text) {
+    var wrap = el('div', { class: 'gore-chat-msg gore-chat-msg-' + role });
+    var bubble = el('div', { class: 'gore-chat-bubble-text', html: formatText(text) });
+    wrap.appendChild(bubble);
+    container.appendChild(wrap);
+    scrollToBottom(container);
+    return bubble;
+  }
+
+  function renderCallButton(container) {
+    var wrap = el('div', { class: 'gore-chat-msg gore-chat-msg-assistant gore-chat-call-wrap' });
+    var link = el('a', {
+      class: 'gore-chat-call',
+      href: CONFIG.phoneHref,
+    }, [
+      el('span', { class: 'gore-chat-call-icon', 'aria-hidden': 'true', html: '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.47.57 3.6a1 1 0 0 1-.25 1l-2.22 2.2Z"/></svg>' }),
+      el('span', { text: 'Ring oss ' + CONFIG.phone }),
+    ]);
+    wrap.appendChild(link);
+    container.appendChild(wrap);
+    scrollToBottom(container);
+  }
+
+  function setBusy(ui, busy) {
+    ui.send.disabled = busy;
+    ui.input.disabled = busy;
+    ui.send.classList.toggle('is-busy', busy);
+  }
+
+  function streamReply(ui, history, userMessage, onDone) {
+    var assistantEl = renderMessage(ui.messages, 'assistant', '');
+    assistantEl.classList.add('is-streaming');
+    var accumulated = '';
+    var buffer = '';
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+
+    fetch(CONFIG.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      body: JSON.stringify({ message: userMessage, history: history }),
+      signal: controller ? controller.signal : undefined,
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (body) {
+          throw new Error('HTTP ' + res.status + ': ' + body.slice(0, 200));
+        });
+      }
+      if (!res.body || typeof res.body.getReader !== 'function') {
+        return res.text().then(function (txt) {
+          accumulated = txt;
+          assistantEl.innerHTML = formatText(accumulated);
+        });
+      }
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+
+      function processEvent(block) {
+        var lines = block.split('\n');
+        var event = 'message';
+        var dataLine = '';
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          if (line.indexOf('event:') === 0) event = line.slice(6).trim();
+          else if (line.indexOf('data:') === 0) dataLine += line.slice(5).trim();
+        }
+        if (!dataLine) return;
+        try {
+          var parsed = JSON.parse(dataLine);
+          if (event === 'token' && typeof parsed.text === 'string') {
+            accumulated += parsed.text;
+            assistantEl.innerHTML = formatText(accumulated);
+            scrollToBottom(ui.messages);
+          } else if (event === 'error') {
+            accumulated = accumulated || 'Något gick fel. Ring oss på ' + CONFIG.phone + '.';
+            assistantEl.innerHTML = formatText(accumulated);
+          }
+        } catch (e) {
+          // ignore malformed event
+        }
+      }
+
+      function pump() {
+        return reader.read().then(function (chunk) {
+          if (chunk.done) return;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          var parts = buffer.split('\n\n');
+          buffer = parts.pop() || '';
+          for (var i = 0; i < parts.length; i++) processEvent(parts[i]);
+          return pump();
+        });
+      }
+      return pump();
+    }).then(function () {
+      assistantEl.classList.remove('is-streaming');
+      var finalText = accumulated.trim();
+      if (!finalText) {
+        finalText = 'Inget svar just nu. Ring oss på ' + CONFIG.phone + '.';
+        assistantEl.innerHTML = formatText(finalText);
+      }
+      if (finalText.indexOf(CONFIG.refusalLine) !== -1) {
+        renderCallButton(ui.messages);
+      }
+      onDone(finalText, null);
+    }).catch(function (err) {
+      assistantEl.classList.remove('is-streaming');
+      var fallback = 'Teknisk hicka. Ring oss på ' + CONFIG.phone + '.';
+      assistantEl.innerHTML = formatText(fallback);
+      renderCallButton(ui.messages);
+      onDone(fallback, err);
+    });
+
+    return controller;
+  }
+
+  function init() {
+    var root = document.getElementById('gore-chat-root');
+    if (!root) {
+      root = el('div', { id: 'gore-chat-root' });
+      document.body.appendChild(root);
+    }
+    root.classList.add('gore-chat-container');
+
+    var ui = buildUI(root);
+    var history = loadHistory();
+    var isOpen = false;
+    var isBusy = false;
+    var greeted = false;
+
+    function open() {
+      isOpen = true;
+      ui.panel.classList.add('is-open');
+      ui.panel.setAttribute('aria-hidden', 'false');
+      ui.bubble.setAttribute('aria-expanded', 'true');
+      if (!greeted && history.length === 0) {
+        renderMessage(ui.messages, 'assistant', CONFIG.greeting);
+        greeted = true;
+      } else if (!greeted) {
+        history.forEach(function (m) {
+          renderMessage(ui.messages, m.role === 'assistant' ? 'assistant' : 'user', m.content);
+        });
+        greeted = true;
+      }
+      setTimeout(function () { ui.input.focus(); }, 180);
+    }
+
+    function close() {
+      isOpen = false;
+      ui.panel.classList.remove('is-open');
+      ui.panel.setAttribute('aria-hidden', 'true');
+      ui.bubble.setAttribute('aria-expanded', 'false');
+    }
+
+    ui.bubble.addEventListener('click', function () {
+      if (isOpen) close(); else open();
+    });
+    ui.close.addEventListener('click', close);
+
+    ui.form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (isBusy) return;
+      var text = ui.input.value.trim();
+      if (!text) return;
+      ui.input.value = '';
+      renderMessage(ui.messages, 'user', text);
+      history.push({ role: 'user', content: text });
+      saveHistory(history);
+      isBusy = true;
+      setBusy(ui, true);
+      streamReply(ui, history.slice(0, -1), text, function (reply) {
+        history.push({ role: 'assistant', content: reply });
+        saveHistory(history);
+        isBusy = false;
+        setBusy(ui, false);
+        ui.input.focus();
+      });
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && isOpen) close();
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();

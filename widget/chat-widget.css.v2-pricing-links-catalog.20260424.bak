@@ -1,0 +1,329 @@
+/* GORE Engineering — chat widget styles
+ * All selectors prefixed .gore-chat- to avoid theme collision.
+ * Palette: bg #0E0E0E, text #FAFAF7, accent #C8321F, silver border #C0C8D0
+ */
+
+.gore-chat-container {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2147483000;
+  font-family: inherit;
+  color: #FAFAF7;
+  line-height: 1.45;
+  font-size: 14px;
+}
+
+.gore-chat-container *,
+.gore-chat-container *::before,
+.gore-chat-container *::after {
+  box-sizing: border-box;
+}
+
+.gore-chat-bubble {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 1px solid rgba(192, 200, 208, 0.25);
+  background: #0E0E0E;
+  color: #FAFAF7;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  transition: transform 180ms ease, background-color 180ms ease, border-color 180ms ease;
+  padding: 0;
+}
+
+.gore-chat-bubble:hover {
+  background: #161616;
+  border-color: rgba(192, 200, 208, 0.45);
+  transform: translateY(-1px);
+}
+
+.gore-chat-bubble:focus-visible {
+  outline: 2px solid #C8321F;
+  outline-offset: 3px;
+}
+
+.gore-chat-bubble[aria-expanded="true"] {
+  background: #C8321F;
+  border-color: #C8321F;
+}
+
+.gore-chat-panel {
+  position: absolute;
+  right: 0;
+  bottom: 76px;
+  width: 360px;
+  height: 520px;
+  max-height: calc(100vh - 96px);
+  background: #0E0E0E;
+  border: 1px solid rgba(192, 200, 208, 0.25);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+.gore-chat-panel.is-open {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.gore-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(192, 200, 208, 0.18);
+  background: #0E0E0E;
+}
+
+.gore-chat-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #FAFAF7;
+}
+
+.gore-chat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #C8321F;
+  box-shadow: 0 0 0 3px rgba(200, 50, 31, 0.18);
+}
+
+.gore-chat-close {
+  background: transparent;
+  border: none;
+  color: #C0C8D0;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.gore-chat-close:hover {
+  color: #FAFAF7;
+  background: rgba(192, 200, 208, 0.08);
+}
+
+.gore-chat-messages {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(192, 200, 208, 0.3) transparent;
+  background: #0E0E0E;
+}
+
+.gore-chat-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.gore-chat-messages::-webkit-scrollbar-thumb {
+  background: rgba(192, 200, 208, 0.3);
+  border-radius: 3px;
+}
+
+.gore-chat-msg {
+  display: flex;
+  max-width: 100%;
+}
+
+.gore-chat-msg-user {
+  justify-content: flex-end;
+}
+
+.gore-chat-msg-assistant {
+  justify-content: flex-start;
+}
+
+.gore-chat-bubble-text {
+  max-width: 85%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  white-space: normal;
+}
+
+.gore-chat-msg-user .gore-chat-bubble-text {
+  background: #C8321F;
+  color: #FAFAF7;
+  border-bottom-right-radius: 2px;
+}
+
+.gore-chat-msg-assistant .gore-chat-bubble-text {
+  background: #161616;
+  color: #FAFAF7;
+  border: 1px solid rgba(192, 200, 208, 0.18);
+  border-bottom-left-radius: 2px;
+}
+
+.gore-chat-msg-assistant .gore-chat-bubble-text.is-streaming::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: #C0C8D0;
+  animation: gore-chat-blink 1s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+@keyframes gore-chat-blink {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 1; }
+}
+
+.gore-chat-call-wrap {
+  margin-top: 2px;
+}
+
+.gore-chat-call {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #C8321F;
+  color: #FAFAF7;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 14px;
+  border: 1px solid #C8321F;
+  transition: background-color 160ms ease;
+}
+
+.gore-chat-call:hover {
+  background: #A92918;
+}
+
+.gore-chat-call-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.gore-chat-form {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid rgba(192, 200, 208, 0.18);
+  background: #0E0E0E;
+}
+
+.gore-chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(192, 200, 208, 0.25);
+  background: #161616;
+  color: #FAFAF7;
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 160ms ease;
+}
+
+.gore-chat-input::placeholder {
+  color: rgba(250, 250, 247, 0.45);
+}
+
+.gore-chat-input:focus {
+  border-color: #C8321F;
+}
+
+.gore-chat-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.gore-chat-send {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid #C8321F;
+  background: #C8321F;
+  color: #FAFAF7;
+  cursor: pointer;
+  transition: background-color 160ms ease, transform 160ms ease;
+  padding: 0;
+}
+
+.gore-chat-send:hover:not(:disabled) {
+  background: #A92918;
+}
+
+.gore-chat-send:disabled,
+.gore-chat-send.is-busy {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.gore-chat-send:focus-visible {
+  outline: 2px solid #FAFAF7;
+  outline-offset: 2px;
+}
+
+@media (max-width: 480px) {
+  .gore-chat-container {
+    right: 12px;
+    bottom: 12px;
+  }
+  .gore-chat-panel {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    top: 0;
+    width: 100vw;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+    border: none;
+    transform: translateY(16px);
+  }
+  .gore-chat-panel.is-open {
+    transform: translateY(0);
+  }
+  .gore-chat-bubble {
+    width: 56px;
+    height: 56px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gore-chat-panel,
+  .gore-chat-bubble,
+  .gore-chat-send,
+  .gore-chat-close {
+    transition: none;
+  }
+  .gore-chat-msg-assistant .gore-chat-bubble-text.is-streaming::after {
+    animation: none;
+  }
+}

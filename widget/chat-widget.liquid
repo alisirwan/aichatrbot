@@ -1,0 +1,11 @@
+{%- comment -%}
+  GORE Engineering chat widget.
+  Ali/Coda: upload chat-widget.css and chat-widget.js to the theme's assets/ folder,
+  then render this snippet in layout/theme.liquid just before </body>:
+    {% render 'chat-widget' %}
+  The Edge endpoint path can be overridden by setting window.GORE_CHAT_ENDPOINT
+  before chat-widget.js loads. Default is /api/chat on the same origin.
+{%- endcomment -%}
+<link rel="stylesheet" href="{{ 'chat-widget.css' | asset_url }}">
+<script defer src="{{ 'chat-widget.js' | asset_url }}"></script>
+<div id="gore-chat-root"></div>

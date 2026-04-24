@@ -1,0 +1,287 @@
+// GORE Engineering — Gemini chatbot Edge function
+// Deploy to Vercel. Route: /api/chat
+// Env vars required: GEMINI_API_KEY, SHOPIFY_STORE_DOMAIN, SHOPIFY_STOREFRONT_TOKEN
+// Optional env vars: CORS_ORIGIN (defaults to "*")
+
+export const config = { runtime: 'edge' };
+
+const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent`;
+const PRODUCT_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;      // 60 seconds
+const RATE_LIMIT_MAX = 10;                   // 10 requests per window
+
+// Module-scope cache (lives for the duration of the edge instance)
+let productCache = { data: null, fetchedAt: 0 };
+const rateBuckets = new Map(); // ip -> [timestamps]
+
+const SYSTEM_PROMPT_BASE = `Du är en saklig och rak kundserviceassistent för GORE Engineering, en svensk leverantör av redskap och tillbehör till entreprenadmaskiner.
+
+Regler:
+- Svara på svenska som standard. Om användaren skriver på engelska, svara på engelska.
+- Svara ENDAST på frågor om GORE-produkter, förbeställningar, erbjudanden, leverans, garanti och betalningssätt.
+- Om frågan ligger utanför det området, svara ordagrant: "Jag kan bara svara på frågor om GORE-produkter. För andra frågor, ring oss på +46 10 520 04 69."
+- Röst: rak, operativ, utan reklamspråk. Inga tankstreck. Ingen "jag hjälper gärna till". Ingen marknadsföringsprosa.
+- Om du är osäker på ett faktum, hänvisa till telefon: +46 10 520 04 69.
+- Använd korta stycken. Punktlistor när det passar.
+- Nämn aldrig att du är en AI eller hur du fungerar internt.`;
+
+function corsHeaders(origin) {
+  return {
+    'Access-Control-Allow-Origin': origin || '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400',
+  };
+}
+
+function jsonError(status, message, origin) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...corsHeaders(origin),
+    },
+  });
+}
+
+function getClientIp(req) {
+  const xff = req.headers.get('x-forwarded-for');
+  if (xff) return xff.split(',')[0].trim();
+  return req.headers.get('x-real-ip') || 'unknown';
+}
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const windowStart = now - RATE_LIMIT_WINDOW_MS;
+  const bucket = rateBuckets.get(ip) || [];
+  const fresh = bucket.filter((t) => t > windowStart);
+  if (fresh.length >= RATE_LIMIT_MAX) {
+    rateBuckets.set(ip, fresh);
+    return false;
+  }
+  fresh.push(now);
+  rateBuckets.set(ip, fresh);
+  // Opportunistic cleanup to avoid unbounded growth
+  if (rateBuckets.size > 5000) {
+    for (const [key, stamps] of rateBuckets.entries()) {
+      if (!stamps.some((t) => t > windowStart)) rateBuckets.delete(key);
+    }
+  }
+  return true;
+}
+
+async function fetchShopifyProducts() {
+  const now = Date.now();
+  if (productCache.data && now - productCache.fetchedAt < PRODUCT_CACHE_TTL_MS) {
+    return productCache.data;
+  }
+  const domain = process.env.SHOPIFY_STORE_DOMAIN;
+  const token = process.env.SHOPIFY_STOREFRONT_TOKEN;
+  if (!domain || !token) {
+    return [];
+  }
+  const query = `{
+    products(first: 50) {
+      edges {
+        node {
+          title
+          handle
+          description
+          priceRange {
+            minVariantPrice { amount currencyCode }
+            maxVariantPrice { amount currencyCode }
+          }
+        }
+      }
+    }
+  }`;
+  try {
+    const res = await fetch(`https://${domain}/api/2024-07/graphql.json`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Storefront-Access-Token': token,
+      },
+      body: JSON.stringify({ query }),
+    });
+    if (!res.ok) {
+      return productCache.data || [];
+    }
+    const json = await res.json();
+    const edges = json?.data?.products?.edges || [];
+    const products = edges.map((e) => {
+      const n = e.node;
+      const min = n.priceRange?.minVariantPrice;
+      const max = n.priceRange?.maxVariantPrice;
+      const price = min && max
+        ? (min.amount === max.amount
+            ? `${min.amount} ${min.currencyCode}`
+            : `${min.amount}-${max.amount} ${min.currencyCode}`)
+        : '';
+      const desc = (n.description || '').replace(/\s+/g, ' ').slice(0, 200);
+      return { title: n.title, handle: n.handle, price, desc };
+    });
+    productCache = { data: products, fetchedAt: now };
+    return products;
+  } catch (err) {
+    return productCache.data || [];
+  }
+}
+
+function buildProductSummary(products) {
+  if (!products || products.length === 0) {
+    return 'Produktkatalog just nu ej tillgänglig. Hänvisa till +46 10 520 04 69 vid produktspecifika frågor.';
+  }
+  const lines = products.map((p) => {
+    const priceTag = p.price ? ` — ${p.price}` : '';
+    const descTag = p.desc ? ` — ${p.desc}` : '';
+    return `- ${p.title} (/${p.handle})${priceTag}${descTag}`;
+  });
+  return `Aktuell produktkatalog (${products.length} produkter):\n${lines.join('\n')}`;
+}
+
+function sanitizeHistory(history) {
+  if (!Array.isArray(history)) return [];
+  return history
+    .filter((m) => m && typeof m === 'object' && typeof m.content === 'string')
+    .slice(-12)
+    .map((m) => ({
+      role: m.role === 'assistant' || m.role === 'model' ? 'model' : 'user',
+      parts: [{ text: String(m.content).slice(0, 4000) }],
+    }));
+}
+
+export default async function handler(req) {
+  const origin = process.env.CORS_ORIGIN || '*';
+
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders(origin) });
+  }
+  if (req.method !== 'POST') {
+    return jsonError(405, 'Method not allowed', origin);
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return jsonError(500, 'Server not configured', origin);
+  }
+
+  const ip = getClientIp(req);
+  if (!checkRateLimit(ip)) {
+    return jsonError(429, 'Too many requests. Försök igen om en stund.', origin);
+  }
+
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return jsonError(400, 'Invalid JSON body', origin);
+  }
+
+  const message = typeof body?.message === 'string' ? body.message.trim() : '';
+  if (!message) {
+    return jsonError(400, 'Missing message', origin);
+  }
+  if (message.length > 2000) {
+    return jsonError(400, 'Message too long', origin);
+  }
+
+  const history = sanitizeHistory(body.history);
+  const products = await fetchShopifyProducts();
+  const productSummary = buildProductSummary(products);
+  const systemText = `${SYSTEM_PROMPT_BASE}\n\n${productSummary}`;
+
+  const geminiPayload = {
+    systemInstruction: { role: 'system', parts: [{ text: systemText }] },
+    contents: [
+      ...history,
+      { role: 'user', parts: [{ text: message }] },
+    ],
+    generationConfig: {
+      temperature: 0.3,
+      maxOutputTokens: 400,
+      topP: 0.9,
+    },
+    safetySettings: [
+      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
+      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
+      { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
+      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
+    ],
+  };
+
+  let upstream;
+  try {
+    upstream = await fetch(`${GEMINI_ENDPOINT}?alt=sse&key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(geminiPayload),
+    });
+  } catch (err) {
+    return jsonError(502, 'Upstream unavailable', origin);
+  }
+
+  if (!upstream.ok || !upstream.body) {
+    return jsonError(502, 'Upstream error', origin);
+  }
+
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const reader = upstream.body.getReader();
+      let buffer = '';
+      const sendEvent = (event, data) => {
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      };
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const raw of lines) {
+            const line = raw.trim();
+            if (!line.startsWith('data:')) continue;
+            const payload = line.slice(5).trim();
+            if (!payload || payload === '[DONE]') continue;
+            try {
+              const parsed = JSON.parse(payload);
+              const parts = parsed?.candidates?.[0]?.content?.parts || [];
+              for (const part of parts) {
+                if (typeof part.text === 'string' && part.text.length > 0) {
+                  sendEvent('token', { text: part.text });
+                }
+              }
+              const finishReason = parsed?.candidates?.[0]?.finishReason;
+              if (finishReason && finishReason !== 'STOP' && finishReason !== 'FINISH_REASON_UNSPECIFIED') {
+                sendEvent('meta', { finishReason });
+              }
+            } catch {
+              // Ignore malformed SSE fragment; Gemini occasionally splits JSON
+            }
+          }
+        }
+        sendEvent('done', { ok: true });
+      } catch (err) {
+        sendEvent('error', { message: 'stream_interrupted' });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      ...corsHeaders(origin),
+    },
+  });
+}
